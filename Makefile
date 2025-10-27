@@ -34,13 +34,14 @@ endif
 
 CC=gcc
 
-ARCH?=-m32
+ARCH?=-m64
 USER_FLAGS=
 CFLAGS=-Wint-to-pointer-cast $(USER_FLAGS)
+CFLAGS+=-std=gnu89 -fcommon
 
 # Link math library on Linux
 ifeq ($(OS),Linux)
-	CFLAGS+=-lm
+	LDFLAGS+=-lm
 endif
 
 ifeq ($(ARCH),-m32)
@@ -94,7 +95,7 @@ studiomdl.log: $(COMMON_SOURCES) $(addprefix studiomdl$(PATHSEP), $(STUDIOMDL_SO
 	$(CPPCHECK) $(COMMON_DEFINES) $(STUDIOMDL_DEFINES) $(CPPCHECKFLAGS) studiomdl 2>$@
 
 $(BIN_DIR)/studiomdl$(EXE): $(STUDIOMDL_OBJECTS)
-	$(CC) $(OPTS) $(STUDIOMDL_OBJECTS) $(STUDIOMDL_COMMON_OBJECTS) -o $@
+	$(CC) $(OPTS) $(STUDIOMDL_OBJECTS) $(STUDIOMDL_COMMON_OBJECTS) -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/%.o : src/%.c
 	$(CC) -c $(OPTS) $(COMMON_DEFINES) $(STUDIOMDL_DEFINES) $(INCLUDE_DIRS) $< -o $@

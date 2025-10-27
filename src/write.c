@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include "cmdlib.h"
 #include "scriplib.h"
@@ -20,7 +21,14 @@ byte *pStart;
 studiohdr_t *phdr;
 studioseqhdr_t *pseqhdr;
 
-#define ALIGN( a ) a = (byte *)((int)((byte *)a + 3) & ~ 3)
+static inline byte *Align4(byte *ptr)
+{
+	uintptr_t value = (uintptr_t)ptr;
+	value = (value + 3u) & ~(uintptr_t)3u;
+	return (byte *)value;
+}
+
+#define ALIGN(a) ((a) = Align4((byte *)(a)))
 void WriteBoneInfo( )
 {
 	int i, j;
@@ -360,7 +368,7 @@ void WriteModel( )
 	vec3_t			*pnorm;
 	mstudiomesh_t	*pmesh;
 	s_trianglevert_t *psrctri;
-	int				cur;
+	byte			*section_start;
 	int				total_tris = 0;
 	int				total_strips = 0;
 
@@ -382,7 +390,7 @@ void WriteModel( )
 	}
 	ALIGN( pData );
 
-	cur = (int)pData;
+	section_start = pData;
 	for (i = 0; i < nummodels; i++) 
 	{
 		int normmap[MAXSTUDIOVERTS];
@@ -449,8 +457,8 @@ void WriteModel( )
 		{
 			VectorCopy( model[i]->normal[normimap[j]].org, pnorm[j] );
 		}
-		printf("vertices  %6d bytes (%d vertices, %d normals)\n", pData - cur, model[i]->numverts, model[i]->numnorms);
-		cur = (int)pData;
+		printf("vertices  %6d bytes (%d vertices, %d normals)\n", (int)(pData - section_start), model[i]->numverts, model[i]->numnorms);
+		section_start = pData;
 
 		// save mesh info
 		pmesh = (mstudiomesh_t *)pData;
@@ -486,8 +494,8 @@ void WriteModel( )
 			total_tris += pmesh[j].numtris;
 			total_strips += numcommandnodes;
 		}
-		printf("mesh      %6d bytes (%d tris, %d strips)\n", pData - cur, total_tris, total_strips);
-		cur = (int)pData;
+			printf("mesh      %6d bytes (%d tris, %d strips)\n", (int)(pData - section_start), total_tris, total_strips);
+			section_start = pData;
 	}	
 }
 

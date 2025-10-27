@@ -1,0 +1,45 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: make ARCH=-m64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: studiomdl-linux
+          path: build/bin-*/studiomdl
+
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Build
+        run: mingw32-make ARCH=-m64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: studiomdl-windows
+          path: build/bin-*/studiomdl.exe

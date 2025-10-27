@@ -16,9 +16,7 @@
 #ifndef _STUDIO_H_
 #define _STUDIO_H_
 
-#if !defined( _WIN32 )
 #include <stdint.h>
-#endif
 
 /*
 ==============================================================================
@@ -178,11 +176,7 @@ typedef struct
 {
 	char				label[32];	// textual name
 	char				name[64];	// file name
-#if defined( _WIN32 )
-    int32				unused1;    // was "cache"  - index pointer
-#else
-    int32_t unused1;
-#endif
+    int32_t unused1;    // was "cache"  - index pointer
   int					unused2;    // was "data" -  hack for group 0
 } mstudioseqgroup_t;
 

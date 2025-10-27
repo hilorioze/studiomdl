@@ -12,9 +12,234 @@
 
 #ifdef	WIN32
 #define PATHSEPARATOR(c) ((c) == '\\' || (c) == '/')
+#define CMDLIB_DIR_SEP '\\'
 #else	//WIN32
 #define PATHSEPARATOR(c) ((c) == '/')
+#define CMDLIB_DIR_SEP '/'
 #endif	//WIN32
+
+#define CMDLIB_PATH_BUFFER 1024
+
+static char script_dir_base[CMDLIB_PATH_BUFFER];
+static qboolean script_dir_base_set;
+
+#ifdef WIN32
+#define CMDLIB_IS_DRIVE_LETTER(path) (strlen(path) >= 2 && (path)[1] == ':')
+#else
+#define CMDLIB_IS_DRIVE_LETTER(path) (0)
+#endif
+
+static qboolean Cmdlib_IsAbsolutePath(const char *path)
+{
+	if (!path || !path[0])
+		return false;
+	if (PATHSEPARATOR(path[0]))
+		return true;
+	if (CMDLIB_IS_DRIVE_LETTER(path))
+		return true;
+	return false;
+}
+
+static qboolean Cmdlib_FindLastComponent(const char *path, size_t pos, size_t *start, size_t *length)
+{
+	if (!path || !pos)
+		return false;
+	size_t end = pos;
+	while (end > 0 && (path[end - 1] == '/' || path[end - 1] == '\\'))
+		end--;
+	if (end == 0)
+		return false;
+	size_t begin = end;
+	while (begin > 0 && path[begin - 1] != '/' && path[begin - 1] != '\\')
+		begin--;
+	*start = begin;
+	*length = end - begin;
+	return (*length > 0);
+}
+
+static size_t Cmdlib_NormalizePathAppend(char *dest, size_t dest_len, size_t pos, const char *src, int *last_is_sep)
+{
+	int local_last = last_is_sep ? *last_is_sep : (pos > 0 && dest[pos - 1] == CMDLIB_DIR_SEP);
+	while (*src && pos + 1 < dest_len)
+	{
+		if (*src == '/' || *src == '\\')
+		{
+			src++;
+			if (local_last)
+				continue;
+			if (pos + 1 >= dest_len)
+				break;
+			dest[pos++] = CMDLIB_DIR_SEP;
+			dest[pos] = '\0';
+			local_last = 1;
+			continue;
+		}
+
+		const char *component_start = src;
+		while (*src && *src != '/' && *src != '\\')
+			src++;
+		size_t component_len = (size_t)(src - component_start);
+		if (!component_len)
+			continue;
+
+		if (component_len == 1 && component_start[0] == '.')
+		{
+			continue;
+		}
+
+		if (component_len == 2 && component_start[0] == '.' && component_start[1] == '.')
+		{
+			size_t last_start = 0;
+			size_t last_len = 0;
+			if (Cmdlib_FindLastComponent(dest, pos, &last_start, &last_len))
+			{
+				if (!(last_len == 2 && dest[last_start] == '.' && dest[last_start + 1] == '.'))
+				{
+					pos = last_start;
+					dest[pos] = '\0';
+					local_last = (pos > 0 && dest[pos - 1] == CMDLIB_DIR_SEP);
+					continue;
+				}
+			}
+			else if (pos > 0 && dest[0] == CMDLIB_DIR_SEP)
+			{
+				pos = 1;
+				dest[pos] = '\0';
+				local_last = 1;
+				continue;
+			}
+			else if (pos > 0)
+			{
+				pos = 0;
+				dest[0] = '\0';
+				local_last = 0;
+				continue;
+			}
+			/* fall through to append ".." when nothing to collapse */
+		}
+
+		if (!local_last && pos > 0)
+		{
+			if (pos + 1 >= dest_len)
+				break;
+			dest[pos++] = CMDLIB_DIR_SEP;
+		}
+		if (pos + component_len >= dest_len)
+			break;
+		memcpy(dest + pos, component_start, component_len);
+		pos += component_len;
+		dest[pos] = '\0';
+		local_last = 0;
+	}
+
+	if (pos >= dest_len)
+		pos = dest_len - 1;
+	dest[pos] = '\0';
+	if (last_is_sep)
+		*last_is_sep = local_last;
+	return pos;
+}
+
+static size_t Cmdlib_NormalizePathCopy(char *dest, size_t dest_len, const char *src, qboolean treat_as_absolute)
+{
+	size_t pos = 0;
+	int last_is_sep = 0;
+	if (!dest_len)
+		return 0;
+	dest[0] = '\0';
+#ifdef WIN32
+	if (CMDLIB_IS_DRIVE_LETTER(src))
+	{
+		if (dest_len < 3)
+			Error("Path too long: %s", src);
+		dest[pos++] = src[0];
+		dest[pos++] = ':';
+		src += 2;
+		while (*src == '/' || *src == '\\')
+			src++;
+	}
+#endif
+	if (treat_as_absolute && (*src == '/' || *src == '\\'))
+	{
+		dest[pos++] = CMDLIB_DIR_SEP;
+		last_is_sep = 1;
+		while (*src == '/' || *src == '\\')
+			src++;
+	}
+	pos = Cmdlib_NormalizePathAppend(dest, dest_len, pos, src, &last_is_sep);
+	return pos;
+}
+
+static const char *Cmdlib_CombineBasePath(const char *path, char *buffer, size_t bufferSize)
+{
+	if (!buffer || bufferSize == 0)
+		Error("Invalid buffer for path combination");
+	if (!path || !path[0])
+	{
+		buffer[0] = '\0';
+		return buffer;
+	}
+	if (!script_dir_base_set)
+	{
+		Cmdlib_NormalizePathCopy(buffer, bufferSize, path, Cmdlib_IsAbsolutePath(path));
+		return buffer;
+	}
+	if (Cmdlib_IsAbsolutePath(path))
+	{
+		Cmdlib_NormalizePathCopy(buffer, bufferSize, path, true);
+		return buffer;
+	}
+	const char *relative = path;
+	for (;;)
+	{
+		if (relative[0] == '.' && (relative[1] == '/' || relative[1] == '\\'))
+		{
+			relative += 2;
+			while (*relative == '/' || *relative == '\\')
+				relative++;
+			continue;
+		}
+		if (relative[0] == '.' && relative[1] == '\0')
+		{
+			relative++;
+		}
+		break;
+	}
+	while (*relative == '/' || *relative == '\\')
+		relative++;
+	size_t base_len = strlen(script_dir_base);
+	if (base_len >= bufferSize)
+		Error("Base path too long: %s", script_dir_base);
+	memcpy(buffer, script_dir_base, base_len);
+	int last_is_sep = (base_len > 0 && buffer[base_len - 1] == CMDLIB_DIR_SEP);
+	Cmdlib_NormalizePathAppend(buffer, bufferSize, base_len, relative, &last_is_sep);
+	return buffer;
+}
+
+void Cmdlib_SetScriptDir(const char *path)
+{
+	if (!path || !path[0])
+	{
+		script_dir_base[0] = 0;
+		script_dir_base_set = false;
+		return;
+	}
+	Cmdlib_NormalizePathCopy(script_dir_base, sizeof(script_dir_base), path, Cmdlib_IsAbsolutePath(path));
+	size_t len = strlen(script_dir_base);
+	if (len == 0)
+	{
+		script_dir_base_set = false;
+		return;
+	}
+	if (!PATHSEPARATOR(script_dir_base[len - 1]))
+	{
+		if (len + 1 >= sizeof(script_dir_base))
+			Error("Script directory path too long: %s", script_dir_base);
+		script_dir_base[len] = CMDLIB_DIR_SEP;
+		script_dir_base[len + 1] = '\0';
+	}
+	script_dir_base_set = true;
+}
 
 // set these before calling CheckParm
 int myargc;
@@ -149,7 +374,7 @@ try_again:
 
 char *ExpandArg (char *path)
 {
-	static char full[1024];
+	static char full[CMDLIB_PATH_BUFFER];
 
 	if (path[0] != '/' && path[0] != '\\' && path[1] != ':')
 	{
@@ -163,18 +388,10 @@ char *ExpandArg (char *path)
 
 char *ExpandPath (char *path)
 {
-	char *psz;
-	static char full[1024];
+	static char full[CMDLIB_PATH_BUFFER];
 	if (!qdir)
 		Error ("ExpandPath called without qdir set");
-	if (path[0] == '/' || path[0] == '\\' || path[1] == ':')
-		return path;
-	psz = strstr(path, qdir);
-	if (psz)
-		strcpy(full, path);
-	else
-		sprintf (full, "%s%s", qdir, path);
-
+	Cmdlib_CombineBasePath(path, full, sizeof(full));
 	return full;
 }
 
@@ -187,7 +404,14 @@ char *ExpandPathAndArchive (char *path)
 
 	if (archive)
 	{
-		sprintf (archivename, "%s/%s", archivedir, path);
+		char normalized_dir[CMDLIB_PATH_BUFFER];
+		Cmdlib_NormalizePathCopy(normalized_dir, sizeof(normalized_dir), archivedir, Cmdlib_IsAbsolutePath(archivedir));
+		size_t base_len = strlen(normalized_dir);
+		if (base_len >= sizeof(archivename))
+			Error("Archive path too long: %s", normalized_dir);
+		memcpy(archivename, normalized_dir, base_len);
+		int last_sep = (base_len > 0 && archivename[base_len - 1] == CMDLIB_DIR_SEP);
+		Cmdlib_NormalizePathAppend(archivename, sizeof(archivename), base_len, path, &last_sep);
 		QCopyFile (expanded, archivename);
 	}
 	return expanded;
@@ -254,8 +478,10 @@ void Q_mkdir (char *path)
 int	FileTime (char *path)
 {
 	struct	stat	buf;
+	char	full[CMDLIB_PATH_BUFFER];
+	const char *lookup = Cmdlib_CombineBasePath(path, full, sizeof(full));
 	
-	if (stat (path,&buf) == -1)
+	if (stat (lookup,&buf) == -1)
 		return -1;
 	
 	return buf.st_mtime;
@@ -409,7 +635,7 @@ int CheckParm (char *check)
 	return 0;
 }
 
-int filelength (FILE *f)
+int Q_filelength (FILE *f)
 {
 	int		pos;
 	int		end;
@@ -437,11 +663,13 @@ FILE *SafeOpenWrite (char *filename)
 FILE *SafeOpenRead (char *filename)
 {
 	FILE	*f;
+	char	full[CMDLIB_PATH_BUFFER];
+	const char *path_to_open = Cmdlib_CombineBasePath(filename, full, sizeof(full));
 
-	f = fopen(filename, "rb");
+	f = fopen(path_to_open, "rb");
 
 	if (!f)
-		Error ("Error opening %s: %s",filename,strerror(errno));
+		Error ("Error opening %s: %s",path_to_open,strerror(errno));
 
 	return f;
 }
@@ -465,7 +693,7 @@ int    LoadFile (char *filename, void **bufferptr)
 	void    *buffer;
 
 	f = SafeOpenRead (filename);
-	length = filelength (f);
+	length = Q_filelength (f);
 	buffer = malloc (length+1);
 	((char *)buffer)[length] = 0;
 	SafeRead (f, buffer, length);

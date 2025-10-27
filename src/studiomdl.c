@@ -6,7 +6,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-// #include <string.h>
+#include <string.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <math.h>
 #include "cmdlib.h"
@@ -31,6 +32,21 @@ void clip_rotations( vec3_t rot );
 #define strcpyn( a, b ) strncpy( a, b, sizeof( a ) )
 
 int k_memtotal;
+static char *cli_output_path;
+static int cli_output_consumed;
+
+static qboolean is_absolute_path(const char *path)
+{
+	if (!path || !path[0])
+		return false;
+	if (path[0] == '/' || path[0] == '\\')
+		return true;
+#ifdef _WIN32
+	if (strlen(path) >= 2 && path[1] == ':' && isalpha((unsigned char)path[0]))
+		return true;
+#endif
+	return false;
+}
 void *kalloc( int num, int size )
 {
 	// printf( "calloc( %d, %d )\n", num, size );
@@ -1472,7 +1488,11 @@ void Grab_Skin ( s_texture_t *ptexture )
 	int		time1;
 
 	sprintf (file1, "%s/%s", cdpartial, ptexture->name);
-	ExpandPathAndArchive (file1);
+{
+	const char *resolved = ExpandPathAndArchive (file1);
+	strncpy (file1, resolved, sizeof(file1));
+	file1[sizeof(file1) - 1] = '\0';
+}
 
 	if (cdtextureset)
 	{
@@ -1480,6 +1500,11 @@ void Grab_Skin ( s_texture_t *ptexture )
 		for (i = 0; i < cdtextureset; i++)
 		{
 			sprintf (file1, "%s/%s", cdtexture[i], ptexture->name);
+			{
+				const char *normalized = ExpandPath(file1);
+				strncpy(file1, normalized, sizeof(file1));
+				file1[sizeof(file1) - 1] = '\0';
+			}
 			time1 = FileTime (file1);
 			if (time1 != -1)
 				break;
@@ -1490,6 +1515,11 @@ void Grab_Skin ( s_texture_t *ptexture )
 	else
 	{
 		sprintf (file1, "%s/%s", cddir, ptexture->name);
+		{
+			const char *normalized = ExpandPath(file1);
+			strncpy(file1, normalized, sizeof(file1));
+			file1[sizeof(file1) - 1] = '\0';
+		}
 	}
 
 	if (stricmp( ".bmp", &file1[strlen(file1)-4]) == 0) {
@@ -1948,6 +1978,11 @@ void Grab_Studio ( s_model_t *pmodel )
 	int		option;
 
 	sprintf (filename, "%s/%s.smd", cddir, pmodel->name);
+	{
+		const char *normalized = ExpandPath(filename);
+		strncpy(filename, normalized, sizeof(filename));
+		filename[sizeof(filename) - 1] = '\0';
+	}
 	time1 = FileTime (filename);
 	if (time1 == -1)
 		Error ("%s doesn't exist", filename);
@@ -2026,8 +2061,23 @@ void Cmd_Flags (void)
 
 void Cmd_Modelname (void)
 {
-	GetToken (false);
-	strcpyn (outname, token);
+	if (!GetToken (false))
+		return;
+
+	if (cli_output_path)
+	{
+		if (cli_output_consumed)
+		{
+			Error("Multiple $modelname entries are not supported when an output file is specified\n");
+		}
+		strncpy(outname, cli_output_path, sizeof(outname));
+		outname[sizeof(outname) - 1] = '\0';
+		cli_output_consumed = 1;
+	}
+	else
+	{
+		strcpyn (outname, token);
+	}
 }
 
 void Option_Studio( )
@@ -2253,6 +2303,11 @@ void Option_Animation ( char *name, s_animation_t *panim )
 	strcpyn( panim->name, name );
 
 	sprintf (filename, "%s/%s.smd", cddir, panim->name);
+	{
+		const char *normalized = ExpandPath(filename);
+		strncpy(filename, normalized, sizeof(filename));
+		filename[sizeof(filename) - 1] = '\0';
+	}
 	time1 = FileTime (filename);
 	if (time1 == -1)
 		Error ("%s doesn't exist", filename);
@@ -3073,6 +3128,7 @@ void ParseScript (void)
 int main (int argc, char **argv)
 {
 	int		i;
+	int		script_index = -1;
 	char	path[1024];
 
 	default_scale = 1.0;
@@ -3090,10 +3146,31 @@ int main (int argc, char **argv)
 	texgamma = 1.8;
 
 	if (argc == 1)
-		Error("usage: studiomdl <flags>\n [-t texture]\n -r(tag reversed)\n -n(tag bad normals)\n -f(flip all triangles)\n [-a normal_blend_angle]\n -h(dump hboxes)\n -i(ignore warnings)\n [-g max_sequencegroup_size(K)]\n file.qc");
+		Error("usage: studiomdl <flags>\n [-t texture]\n [-o output]\n -r(tag reversed)\n -n(tag bad normals)\n -f(flip all triangles)\n [-a normal_blend_angle]\n -h(dump hboxes)\n -i(ignore warnings)\n [-g max_sequencegroup_size(K)]\n file.qc");
 
-	for (i = 1; i < argc - 1; i++) {
+	for (i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
+			if (!strcmp(argv[i], "--output"))
+			{
+				if (i + 1 >= argc)
+				{
+					Error("Option --output requires a value\n");
+				}
+				i++;
+				if (cli_output_path)
+					free(cli_output_path);
+				cli_output_path = copystring(argv[i]);
+				cli_output_consumed = 0;
+				continue;
+			}
+			if (!strncmp(argv[i], "--output=", 9))
+			{
+				if (cli_output_path)
+					free(cli_output_path);
+				cli_output_path = copystring(argv[i] + 9);
+				cli_output_consumed = 0;
+				continue;
+			}
 			switch( argv[i][1] ) {
 			case 't':
 				i++;
@@ -3103,8 +3180,28 @@ int main (int argc, char **argv)
 					strcpy ( sourcetexture[numrep], argv[i]);
 					printf ("Replaceing %s with %s\n", sourcetexture[numrep], defaulttexture[numrep] );
 				}
-				printf ("Using default texture: %s\n", defaulttexture);
+				printf ("Using default texture: %s\n", defaulttexture[numrep]);
 				numrep++;
+				break;
+			case 'o':
+				if (argv[i][2] != '\0')
+				{
+					if (cli_output_path)
+						free(cli_output_path);
+					cli_output_path = copystring(&argv[i][2]);
+				}
+				else
+				{
+					if (i + 1 >= argc)
+					{
+						Error("Option -o requires a value\n");
+					}
+					i++;
+					if (cli_output_path)
+						free(cli_output_path);
+					cli_output_path = copystring(argv[i]);
+				}
+				cli_output_consumed = 0;
 				break;
 			case 'r':
 				tag_reversed = 1;
@@ -3132,24 +3229,95 @@ int main (int argc, char **argv)
 			case 'b':
 				keep_all_bones = 1;
 				break;
-			}
 		}
+		}
+		else if (script_index == -1)
+		{
+			script_index = i;
+		}
+		else
+		{
+			Error("Unexpected extra argument: %s\n", argv[i]);
+		}
+	}
+
+	if (script_index == -1)
+	{
+		Error("No script file specified\n");
 	}
 
 	strcpy( sequencegroup[numseqgroups].label, "default" );
 	numseqgroups = 1;
 // load the script
-	strcpy (path, argv[i]);
-	DefaultExtension (path, ".qc");
+	{
+		char script_path[1024];
+		char script_dir[1024];
+		if (is_absolute_path(argv[script_index]))
+		{
+			strncpy(script_path, argv[script_index], sizeof(script_path));
+			script_path[sizeof(script_path) - 1] = '\0';
+		}
+		else
+		{
+			char cwd[1024];
+			Q_getwd(cwd);
+			size_t cwd_len = strlen(cwd);
+			if (cwd_len > 0 && cwd[cwd_len - 1] != '/' && cwd[cwd_len - 1] != '\\')
+			{
+				if (cwd_len + 1 >= sizeof(cwd))
+					Error("Working directory path too long");
+#ifdef _WIN32
+				cwd[cwd_len] = '\\';
+#else
+				cwd[cwd_len] = '/';
+#endif
+				cwd[cwd_len + 1] = '\0';
+			}
+			size_t cwd_len2 = strlen(cwd);
+			size_t arg_len = strlen(argv[script_index]);
+			if (cwd_len2 + arg_len >= sizeof(script_path))
+				Error("Script path too long: %s%s", cwd, argv[script_index]);
+			memcpy(script_path, cwd, cwd_len2);
+			memcpy(script_path + cwd_len2, argv[script_index], arg_len + 1);
+		}
+		DefaultExtension (script_path, ".qc");
+		ExtractFilePath(script_path, script_dir);
+		if (!script_dir[0])
+		{
+			strcpy(script_dir, "./");
+		}
+		Cmdlib_SetScriptDir(script_dir);
+		strncpy(cddir, script_dir, sizeof(cddir));
+		cddir[sizeof(cddir) - 1] = '\0';
+		strncpy(cdpartial, script_dir, sizeof(cdpartial));
+		cdpartial[sizeof(cdpartial) - 1] = '\0';
+		strncpy(qdir, script_dir, sizeof(qdir));
+		qdir[sizeof(qdir) - 1] = '\0';
+		strncpy(path, script_path, sizeof(path));
+		path[sizeof(path) - 1] = '\0';
+	}
 	// SetQdirFromPath (path);
 	LoadScriptFile (path);
 // parse it
 	ClearModel ();
-	strcpy (outname, argv[i]);
+	strncpy (outname, path, sizeof(outname));
+	outname[sizeof(outname) - 1] = '\0';
 	ParseScript ();
+	if (cli_output_path && !cli_output_consumed)
+	{
+		strncpy(outname, cli_output_path, sizeof(outname));
+		outname[sizeof(outname) - 1] = '\0';
+		cli_output_consumed = 1;
+	}
 	SetSkinValues ();
 	SimplifyModel ();
 	WriteFile ();
+
+	if (cli_output_path)
+	{
+		free(cli_output_path);
+		cli_output_path = NULL;
+	}
 
 	return 0;
 }

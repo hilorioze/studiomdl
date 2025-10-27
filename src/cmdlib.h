@@ -43,7 +43,7 @@ int Q_strncasecmp (char *s1, char *s2, int n);
 int Q_strcasecmp (char *s1, char *s2);
 void Q_getwd (char *out);
 
-int filelength (FILE *f);
+int Q_filelength (FILE *f);
 int	FileTime (char *path);
 
 void	Q_mkdir (char *path);
@@ -54,6 +54,7 @@ void SetQdirFromPath (char *path);
 char *ExpandArg (char *path);	// from cmd line
 char *ExpandPath (char *path);	// from scripts
 char *ExpandPathAndArchive (char *path);
+void Cmdlib_SetScriptDir(const char *path);
 
 
 double I_FloatTime (void);
